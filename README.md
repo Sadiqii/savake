@@ -6,37 +6,41 @@ This contract implements a multi-tier staking protocol with fungible and non-fun
 
 ## Features
 
-- **Fungible Token (`sbtc-token`)**  
+- **Fungible Token (`savake-token`)**  
   Used for staking, rewards, and fee payments.
 
 - **Non-Fungible Token (`staking-position`)**  
   Represents individual staking positions (Liquid Staking Derivatives, LSD).
 
 - **Multi-Tier Staking**  
-  Users are assigned tiers (1-4) based on their total staked amount. Higher tiers receive better multipliers.
+  Users are assigned tiers (1-4) based on their total staked amount:
+  - Tier 0: < 1,000 tokens (0.5x multiplier)
+  - Tier 1: 1,000+ tokens (1.0x multiplier)
+  - Tier 2: 5,000+ tokens (1.25x multiplier)
+  - Tier 3: 25,000+ tokens (1.5x multiplier)
+  - Tier 4: 100,000+ tokens (2.0x multiplier)
+
+- **Dynamic Fee Structure**
+  - Standard fee: Configurable (default 1%)
+  - Large deposits (10,000+ tokens): 0.5% fee
 
 - **Referral System**  
-  Users can register a referrer and earn referral rewards.
+  Users can set referrers and earn 10 token rewards per referral.
 
 - **NFT Positions**  
-  Each staking position is represented as an NFT, which can be transferred or redeemed.
+  Each staking position is minted as an NFT with:
+  - Owner information
+  - Staked amount
+  - Creation timestamp
+  - Lock period
+  - Tier level
+  - Reward multiplier
 
 - **Admin Controls**  
-  Admin can pause/unpause the contract, set fees, mint/burn tokens, and set the treasury address.
-
-- **Emergency Unstake**  
-  If the contract is paused for more than 144 blocks, users can unstake even if locked.
-
----
-
-## Tier System
-
-| Tier | Threshold (sbtc) | Multiplier |
-|------|------------------|------------|
-| 1    | 1,000            | 1.0x       |
-| 2    | 5,000            | 1.25x      |
-| 3    | 25,000           | 1.5x       |
-| 4    | 100,000          | 2.0x       |
+  - Pause/unpause contract
+  - Set staking fees (max 10%)
+  - Set treasury address
+  - Mint/burn tokens
 
 ---
 
@@ -45,120 +49,105 @@ This contract implements a multi-tier staking protocol with fungible and non-fun
 ### Staking
 
 - `stake(amount)`  
-  Stake tokens without a lock.
+  Stake tokens with dynamic fee structure.
 
 - `stake-and-bake(amount, lock-period)`  
-  Stake tokens with an optional lock period and referral.
+  Stake tokens with optional lock period up to 52,560 blocks (~1 year).
 
 - `unstake(amount)`  
-  Unstake tokens (if not locked).
+  Unstake tokens if not locked.
 
 - `emergency-unstake(amount)`  
-  Unstake tokens during emergency (if paused > 144 blocks).
+  Available when contract is paused > 144 blocks.
 
 ### NFT Positions
 
 - `create-staking-position(amount, lock-period)`  
-  Create an NFT staking position.
+  Create and mint NFT position.
 
-- `transfer-position(position-id, to)`  
-  Transfer an NFT position.
-
-- `redeem-position(position-id)`  
-  Redeem an NFT position (burn NFT and tokens).
+- `transfer-position(position-id, recipient)`  
+  Transfer NFT position to new owner.
 
 ### Referral
 
-- `register-referral(referrer)`  
-  Register a referrer for referral rewards.
+- `set-referrer(referrer)`  
+  Set referrer for reward sharing.
 
 ### Admin
 
-- `set-admin(new-admin)`  
-  Change admin.
-
-- `set-fee(new-fee)`  
-  Set staking fee.
-
-- `set-treasury(new-treasury)`  
-  Set treasury address.
-
-- `pause()`  
-  Pause contract.
-
-- `unpause()`  
-  Unpause contract.
-
-- `mint-rewards(recipient, amount)`  
-  Mint rewards to a user.
-
-- `admin-burn(amount)`  
-  Burn tokens from admin account.
+- `pause-contract()`
+- `unpause-contract()`
+- `set-treasury-address(new-treasury)`
+- `set-staking-fee(new-fee)`
+- `mint-rewards(recipient, amount)`
+- `burn-tokens(amount)`
 
 ---
 
 ## Read-Only Functions
 
-- `get-balance(who)`  
-  Get sbtc-token balance.
-
-- `get-total-staked`  
-  Get total staked amount.
-
-- `get-user-tier(user)`  
-  Get user's tier.
-
-- `get-user-multiplier(user)`  
-  Get user's multiplier.
-
-- `get-staking-position(position-id)`  
-  Get NFT position details.
-
-- `get-user-positions(user)`  
-  Get user's NFT positions.
+- `get-user-balance(user)`
+- `get-user-tier(user)`
+- `get-user-lock(user)`
+- `get-position-details(position-id)`
+- `get-user-positions(user)`
+- `get-contract-info()`
+- `get-user-referrer(user)`
 
 ---
 
-## Events
+## Token Standard Implementation
 
-The contract emits events for all major actions, including:
+### SIP-010 Functions
+- `transfer(amount, from, to, memo)`
+- `get-name()`
+- `get-symbol()`
+- `get-decimals()`
+- `get-balance(who)`
+- `get-total-supply()`
+- `get-token-uri()`
 
-- Deposits, withdrawals, staking, unstaking
-- Position creation, transfer, redemption
-- Referral registration and rewards
-- Admin updates and emergency actions
+---
+
+## Security Features
+
+- Input validation for all public functions
+- Principal address validation
+- Amount validation
+- Lock period limits
+- Fee caps (10% maximum)
+- Emergency unstaking mechanism
+- Ownership verification for transfers
+
+---
+
+## Error Handling
+
+Comprehensive error codes for:
+- Authentication failures
+- Invalid inputs
+- Insufficient balances
+- Contract state issues
+- Position management
+- Referral system
 
 ---
 
 ## Usage Example
 
-1. **Stake Tokens**
-   ```
-   (stake u1000)
-   ```
+```clarity
+;; Stake tokens
+(stake u1000)
 
-2. **Create NFT Position**
-   ```
-   (create-staking-position u5000 u144)
-   ```
+;; Create locked position
+(create-staking-position u5000 u144)
 
-3. **Register Referral**
-   ```
-   (register-referral 'SP...REFERRER)
-   ```
+;; Set referrer
+(set-referrer 'SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7)
 
-4. **Unstake Tokens**
-   ```
-   (unstake u1000)
-   ```
-
----
-
-## Security & Controls
-
-- Only admin can perform sensitive actions.
-- Emergency unstake is available if contract is paused for > 144 blocks.
-- All state changes are validated and logged via events.
+;; Transfer position
+(transfer-position u1 'SP2J6ZY48GV1EZ5V2V5RB9MP66SW86PYKKNRV9EJ7)
+```
 
 ---
 
