@@ -19,6 +19,7 @@
 (define-constant err-invalid-address (err u113))
 (define-constant err-zero-amount (err u114))
 (define-constant err-invalid-principal (err u115))
+(define-constant err-insufficient-contract-balance (err u116))
 
 ;; Data Variables
 (define-data-var contract-paused bool false)
@@ -27,6 +28,7 @@
 (define-data-var total-staked uint u0)
 (define-data-var staking-fee uint u100) ;; 1% fee (100 basis points)
 (define-data-var next-position-id uint u1)
+(define-data-var contract-stx-balance uint u0) ;; Track STX held by contract
 
 ;; Data Maps
 (define-map user-balances principal uint)
@@ -129,7 +131,7 @@
             (/ (* amount u50) u10000)  ;; 0.5% for large deposits
             (/ (* amount fee-rate) u10000))))
 
-;; Core Staking Functions
+;; Core Staking Functions - FIXED STX FLOW
 (define-public (stake (amount uint))
     (begin
         ;; Input validation
@@ -140,10 +142,19 @@
               (net-amount (- amount fee))
               (current-balance (default-to u0 (map-get? user-balances tx-sender))))
             
-            ;; Transfer fee to treasury
-            (try! (stx-transfer? fee tx-sender (var-get treasury-address)))
+            ;; FIXED: Transfer FULL amount to contract first
+            (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
             
-            ;; Mint tokens to user
+            ;; Update contract STX balance
+            (var-set contract-stx-balance (+ (var-get contract-stx-balance) amount))
+            
+            ;; Send fee to treasury FROM the contract
+            (try! (as-contract (stx-transfer? fee tx-sender (var-get treasury-address))))
+            
+            ;; Update contract balance (subtract fee sent to treasury)
+            (var-set contract-stx-balance (- (var-get contract-stx-balance) fee))
+            
+            ;; Mint tokens to user (now backed by STX held in contract)
             (try! (ft-mint? savake-token net-amount tx-sender))
             
             ;; Update user balance
@@ -176,6 +187,7 @@
                 true)
             (ok stake-result))))
 
+;; FIXED: Proper unstaking with STX return
 (define-public (unstake (amount uint))
     (begin
         ;; Input validation
@@ -183,10 +195,14 @@
         (asserts! (not (var-get contract-paused)) err-contract-paused)
         
         (let ((current-balance (default-to u0 (map-get? user-balances tx-sender)))
-              (lock-height (default-to u0 (map-get? user-locks tx-sender))))
+              (lock-height (default-to u0 (map-get? user-locks tx-sender)))
+              (contract-balance (var-get contract-stx-balance)))
             
             ;; Check sufficient balance
             (asserts! (>= current-balance amount) err-insufficient-balance)
+            
+            ;; Check contract has enough STX
+            (asserts! (>= contract-balance amount) err-insufficient-contract-balance)
             
             ;; Check if tokens are locked (unless emergency unstake conditions are met)
             (asserts! (or (<= lock-height stacks-block-height)
@@ -194,7 +210,7 @@
                               (> (- stacks-block-height (var-get pause-timestamp)) u144))) ;; 24 hours
                      err-locked-tokens)
             
-            ;; Burn tokens
+            ;; Burn tokens first
             (try! (ft-burn? savake-token amount tx-sender))
             
             ;; Update user balance
@@ -206,8 +222,13 @@
             ;; Update user tier
             (try! (update-user-tier tx-sender))
             
-            ;; Transfer STX back to user
-            (stx-transfer? amount (as-contract tx-sender) tx-sender))))
+            ;; FIXED: Transfer STX from contract to user
+            (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
+            
+            ;; Update contract STX balance
+            (var-set contract-stx-balance (- contract-balance amount))
+            
+            (ok amount))))
 
 ;; Liquid Staking Position Functions
 (define-public (create-staking-position (amount uint) (lock-period uint))
@@ -316,6 +337,14 @@
         (asserts! (is-valid-amount amount) err-zero-amount)
         (ft-burn? savake-token amount tx-sender)))
 
+;; Admin function to sync contract balance (for maintenance)
+(define-public (sync-contract-balance)
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (let ((actual-balance (stx-get-balance (as-contract tx-sender))))
+            (var-set contract-stx-balance actual-balance)
+            (ok actual-balance))))
+
 ;; Read-only Functions
 (define-read-only (get-user-balance (user principal))
     (begin
@@ -348,7 +377,8 @@
         treasury-address: (var-get treasury-address),
         staking-fee: (var-get staking-fee),
         contract-paused: (var-get contract-paused),
-        next-position-id: (var-get next-position-id)
+        next-position-id: (var-get next-position-id),
+        contract-stx-balance: (var-get contract-stx-balance)
     }))
 
 (define-read-only (get-user-referrer (user principal))
@@ -356,7 +386,20 @@
         (asserts! (is-valid-principal user) err-invalid-principal)
         (ok (map-get? user-referrers user))))
 
-;; Emergency Functions
+;; Contract solvency check
+(define-read-only (get-contract-solvency)
+    (let ((total-tokens (ft-get-supply savake-token))
+          (contract-stx (var-get contract-stx-balance)))
+        (ok {
+            total-tokens-issued: total-tokens,
+            contract-stx-balance: contract-stx,
+            is-solvent: (>= contract-stx total-tokens),
+            solvency-ratio: (if (> total-tokens u0) 
+                              (/ (* contract-stx u10000) total-tokens) 
+                              u10000)
+        })))
+
+;; FIXED: Emergency unstake with proper STX return
 (define-public (emergency-unstake (amount uint))
     (begin
         ;; Input validation
@@ -364,8 +407,11 @@
         (asserts! (var-get contract-paused) err-contract-paused)
         (asserts! (> (- stacks-block-height (var-get pause-timestamp)) u144) err-locked-tokens) ;; 24 hours
         
-        (let ((current-balance (default-to u0 (map-get? user-balances tx-sender))))
+        (let ((current-balance (default-to u0 (map-get? user-balances tx-sender)))
+              (contract-balance (var-get contract-stx-balance)))
+            
             (asserts! (>= current-balance amount) err-insufficient-balance)
+            (asserts! (>= contract-balance amount) err-insufficient-contract-balance)
             
             ;; Burn tokens
             (try! (ft-burn? savake-token amount tx-sender))
@@ -377,4 +423,10 @@
             ;; Update tier
             (try! (update-user-tier tx-sender))
             
-            (ok true))))
+            ;; FIXED: Return STX to user in emergency
+            (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
+            
+            ;; Update contract STX balance
+            (var-set contract-stx-balance (- contract-balance amount))
+            
+            (ok amount))))
