@@ -196,7 +196,8 @@
         
         (let ((current-balance (default-to u0 (map-get? user-balances tx-sender)))
               (lock-height (default-to u0 (map-get? user-locks tx-sender)))
-              (contract-balance (var-get contract-stx-balance)))
+              (contract-balance (var-get contract-stx-balance))
+              (sender tx-sender))
             
             ;; Check sufficient balance
             (asserts! (>= current-balance amount) err-insufficient-balance)
@@ -223,7 +224,7 @@
             (try! (update-user-tier tx-sender))
             
             ;; FIXED: Transfer STX from contract to user
-            (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
+            (try! (as-contract (stx-transfer? amount tx-sender sender)))
             
             ;; Update contract STX balance
             (var-set contract-stx-balance (- contract-balance amount))
@@ -408,7 +409,8 @@
         (asserts! (> (- stacks-block-height (var-get pause-timestamp)) u144) err-locked-tokens) ;; 24 hours
         
         (let ((current-balance (default-to u0 (map-get? user-balances tx-sender)))
-              (contract-balance (var-get contract-stx-balance)))
+              (contract-balance (var-get contract-stx-balance))
+              (sender tx-sender))
             
             (asserts! (>= current-balance amount) err-insufficient-balance)
             (asserts! (>= contract-balance amount) err-insufficient-contract-balance)
@@ -424,7 +426,7 @@
             (try! (update-user-tier tx-sender))
             
             ;; FIXED: Return STX to user in emergency
-            (try! (as-contract (stx-transfer? amount tx-sender tx-sender)))
+            (try! (as-contract (stx-transfer? amount tx-sender sender)))
             
             ;; Update contract STX balance
             (var-set contract-stx-balance (- contract-balance amount))
